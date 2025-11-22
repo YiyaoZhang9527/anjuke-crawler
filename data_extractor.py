@@ -120,37 +120,72 @@ class DataExtractor:
                 // 6. 租赁方式
                 result["租赁方式"] = allText.includes('整租') ? '整租' : '合租';
 
-                // 7. 房源概况 - 直接搜索包含房源概况关键词的元素
-                let houseOverviewElement = null;
-                const elements = document.querySelectorAll('*');
+                // 7. 房源概况 - 使用DOM结构定位为主，关键词匹配为辅
+                let houseOverviewText = '';
 
-                // 搜索包含房源概况关键词的元素
-                for (let element of elements) {{
-                    const text = element.textContent || '';
-                    if ((text.includes('小区环境优美') ||
-                         text.includes('南北通透') ||
-                         text.includes('拎包即住') ||
-                         text.includes('性价比高') ||
-                         text.includes('物业办事效率')) &&
-                        text.length > 50 &&
-                        text.length < 2000) {{
-                        houseOverviewElement = element;
-                        break;
+                // 方法1：通过DOM结构定位（最可靠）
+                const overviewHeading = Array.from(document.querySelectorAll('h2')).find(h2 =>
+                    h2.textContent && h2.textContent.includes('房源概况')
+                );
+
+                if (overviewHeading) {{
+                    const parentDiv = overviewHeading.parentElement;
+                    if (parentDiv && parentDiv.nextElementSibling) {{
+                        const contentDiv = parentDiv.nextElementSibling;
+                        if (contentDiv.tagName === 'DIV' && contentDiv.textContent.trim().length > 10) {{
+                            houseOverviewText = contentDiv.textContent.trim();
+                        }}
                     }}
                 }}
 
-                // 如果找到房源概况元素，提取内容
-                if (houseOverviewElement) {{
-                    let overviewText = houseOverviewElement.textContent.trim();
+                // 方法2：如果DOM结构定位失败，使用关键词搜索
+                if (!houseOverviewText || houseOverviewText.length < 10) {{
+                    const elements = document.querySelectorAll('*');
+                    for (let element of elements) {{
+                        const text = element.textContent || '';
+                        // 放宽关键词条件，只要包含常见的房源描述词汇即可
+                        if ((text.includes('小区') || text.includes('南北') || text.includes('采光') ||
+                             text.includes('装修') || text.includes('交通') || text.includes('周边') ||
+                             text.includes('拎包') || text.includes('舒适') || text.includes('性价比') ||
+                             text.includes('空间') || text.includes('格局') || text.includes('楼层')) &&
+                            text.length > 30 && text.length < 2000 &&
+                            !text.includes('猜你喜欢') && !text.includes('相似房源') &&
+                            !text.includes('附近房源') && !text.includes('小区问答') &&
+                            !text.includes('看了又看')) {{
+                            houseOverviewText = text.trim();
+                            break;
+                        }}
+                    }}
+                }}
 
-                    // 清理房源概况内容，移除无关内容
-                    const cleanOverview = overviewText
+                // 方法3：如果前两种方法都失败，查找包含"房源概况"的区域的下一个div
+                if (!houseOverviewText || houseOverviewText.length < 10) {{
+                    const allHeadings = document.querySelectorAll('h2, h3');
+                    for (let heading of allHeadings) {{
+                        if (heading.textContent && heading.textContent.includes('房源概况')) {{
+                            let nextElement = heading.nextElementSibling;
+                            while (nextElement) {{
+                                if (nextElement.tagName === 'DIV' && nextElement.textContent.trim().length > 10) {{
+                                    houseOverviewText = nextElement.textContent.trim();
+                                    break;
+                                }}
+                                nextElement = nextElement.nextElementSibling;
+                            }}
+                            if (houseOverviewText) break;
+                        }}
+                    }}
+                }}
+
+                // 清理房源概况内容
+                if (houseOverviewText && houseOverviewText.length > 10) {{
+                    const cleanOverview = houseOverviewText
                         .replace(/猜你喜欢.*$/g, '')
                         .replace(/相似房源.*$/g, '')
                         .replace(/附近房源.*$/g, '')
                         .replace(/专家解读.*$/g, '')
                         .replace(/小区问答.*$/g, '')
                         .replace(/出租要求.*$/g, '')
+                        .replace(/看了又看.*$/g, '')
                         .replace(/\\s+/g, ' ')
                         .trim();
 
@@ -159,122 +194,93 @@ class DataExtractor:
                     }}
                 }}
 
-                // 8. 设施提取 - 根据租赁方式和has类名精确提取
-                const rentType = allText.includes('整租') ? '整租' : '合租';
+                // 8. 设施提取 - 按优先级处理整租/合租的不同显示模式
+                // 设施定义：用于验证提取的是否是有效设施项
+                const validFacilities = ['冰箱', '洗衣机', '热水器', '宽带', '沙发', '油烟机', '燃气灶', '可做饭',
+                                         '电视', '空调', '衣柜', '床', '卫生间', '智能门锁', '阳台', '暖气'];
 
-                if (rentType === '整租') {{
-                    // 整租：查找房屋配套，只提取带has类名的设施
-                    let facilitySection = null;
+                // 初始化结果
+                result["房屋设施"] = '';
+                result["卧室设施"] = '';
+                result["公共设施"] = '';
 
-                    // 方法1：查找包含"房屋配套"文本的所有元素
-                    const allElements = Array.from(document.querySelectorAll('*'));
+                // 步骤1：查找所有设施标题和对应的列表（分分类模式）
+                const headings = document.querySelectorAll('h2, h3, h4');
+                let foundBedroomFacilities = [];
+                let foundPublicFacilities = [];
+                let foundHouseFacilities = [];
 
-                    for (let element of allElements) {{
-                        if (element.textContent && element.textContent.includes('房屋配套')) {{
-                            // 查找下一个包含设施的列表
-                            let nextElement = element.nextElementSibling;
-                            while (nextElement) {{
-                                if (nextElement.tagName === 'UL' || nextElement.tagName === 'OL') {{
-                                    facilitySection = nextElement;
-                                    break;
-                                }}
-                                nextElement = nextElement.nextElementSibling;
+                headings.forEach(heading => {{
+                    const title = heading.textContent.trim();
+
+                    // 检查是否是设施相关的标题
+                    if (title.includes('卧室设施')) {{
+                        // 查找卧室设施列表
+                        let nextElement = heading.nextElementSibling;
+                        while (nextElement) {{
+                            if (nextElement.tagName === 'UL' || nextElement.tagName === 'OL') {{
+                                foundBedroomFacilities = Array.from(nextElement.querySelectorAll('li'))
+                                    .map(li => li.textContent?.trim() || '')
+                                    .filter(text => text && validFacilities.includes(text));
+                                break;
                             }}
-                            if (facilitySection) break;
+                            nextElement = nextElement.nextElementSibling;
+                        }}
+                    }} else if (title.includes('公共设施')) {{
+                        // 查找公共设施列表
+                        let nextElement = heading.nextElementSibling;
+                        while (nextElement) {{
+                            if (nextElement.tagName === 'UL' || nextElement.tagName === 'OL') {{
+                                foundPublicFacilities = Array.from(nextElement.querySelectorAll('li'))
+                                    .map(li => li.textContent?.trim() || '')
+                                    .filter(text => text && validFacilities.includes(text));
+                                break;
+                            }}
+                            nextElement = nextElement.nextElementSibling;
+                        }}
+                    }} else if (title.includes('房屋配套') || title.includes('房屋设施')) {{
+                        // 查找房屋设施列表
+                        let nextElement = heading.nextElementSibling;
+                        while (nextElement) {{
+                            if (nextElement.tagName === 'UL' || nextElement.tagName === 'OL') {{
+                                foundHouseFacilities = Array.from(nextElement.querySelectorAll('li'))
+                                    .map(li => li.textContent?.trim() || '')
+                                    .filter(text => text && validFacilities.includes(text));
+                                break;
+                            }}
+                            nextElement = nextElement.nextElementSibling;
                         }}
                     }}
+                }});
 
-                    // 方法2：如果方法1失败，直接查找包含设施的列表
-                    if (!facilitySection) {{
-                        const allLists = document.querySelectorAll('ul, ol');
-                        for (let list of allLists) {{
-                            const items = list.querySelectorAll('li');
-                            if (items.length > 5) {{ // 假设设施列表有较多项目
-                                const firstItem = items[0].textContent;
-                                // 检查是否包含常见的设施词汇
-                                if (firstItem.includes('冰箱') || firstItem.includes('洗衣机') ||
-                                    firstItem.includes('空调') || firstItem.includes('电视')) {{
-                                    facilitySection = list;
-                                    break;
-                                }}
+                // 步骤2：根据找到的设施决定填充逻辑
+                // 优先级1：如果找到分分类设施，使用分分类模式
+                if (foundBedroomFacilities.length > 0 || foundPublicFacilities.length > 0) {{
+                    result["卧室设施"] = foundBedroomFacilities.join('、');
+                    result["公共设施"] = foundPublicFacilities.join('、');
+                    // 房屋设施为空，表示使用分分类模式
+                }}
+                // 优先级2：如果找到房屋配套设施，使用统一模式
+                else if (foundHouseFacilities.length > 0) {{
+                    result["房屋设施"] = foundHouseFacilities.join('、');
+                }}
+                // 优先级3：都没找到，通过设施关键词回退查找
+                else {{
+                    // 回退逻辑：通过关键词查找设施列表
+                    const allLists = document.querySelectorAll('ul, ol');
+                    for (let list of allLists) {{
+                        const items = list.querySelectorAll('li');
+                        if (items.length >= 3) {{
+                            const facilityItems = Array.from(items)
+                                .map(li => li.textContent?.trim() || '')
+                                .filter(text => text && validFacilities.includes(text));
+
+                            if (facilityItems.length >= 3) {{
+                                result["房屋设施"] = facilityItems.join('、');
+                                break;
                             }}
                         }}
                     }}
-
-                    if (facilitySection) {{
-                        const facilityItems = facilitySection.querySelectorAll('li');
-                        const facilities = [];
-
-                        facilityItems.forEach(item => {{
-                            const text = item.textContent?.trim() || '';
-                            // 只提取带has类名的设施
-                            if (text && item.className.includes('has')) {{
-                                facilities.push(text);
-                            }}
-                        }});
-
-                        result["房屋设施"] = facilities.join('、');
-                        result["卧室设施"] = '';
-                        result["公共设施"] = '';
-                    }}
-                }} else {{
-                    // 合租：分别提取卧室设施和公共设施
-                    let bedroomSection = null;
-                    let publicSection = null;
-
-                    // 查找卧室设施
-                    const elements = Array.from(document.querySelectorAll('*'));
-                    elements.forEach(el => {{
-                        if (el.textContent && el.textContent.includes('卧室设施')) {{
-                            let nextElement = el.nextElementSibling;
-                            while (nextElement) {{
-                                if (nextElement.tagName === 'UL' || nextElement.tagName === 'OL') {{
-                                    bedroomSection = nextElement;
-                                    break;
-                                }}
-                                nextElement = nextElement.nextElementSibling;
-                            }}
-                        }}
-                        if (el.textContent && el.textContent.includes('公共设施')) {{
-                            let nextElement = el.nextElementSibling;
-                            while (nextElement) {{
-                                if (nextElement.tagName === 'UL' || nextElement.tagName === 'OL') {{
-                                    publicSection = nextElement;
-                                    break;
-                                }}
-                                nextElement = nextElement.nextElementSibling;
-                            }}
-                        }}
-                    }});
-
-                    const bedroomFacilities = [];
-                    const publicFacilities = [];
-
-                    // 提取卧室设施（带has类名）
-                    if (bedroomSection) {{
-                        const bedroomItems = bedroomSection.querySelectorAll('li');
-                        bedroomItems.forEach(item => {{
-                            const text = item.textContent?.trim() || '';
-                            if (text && item.className.includes('has')) {{
-                                bedroomFacilities.push(text);
-                            }}
-                        }});
-                    }}
-
-                    // 提取公共设施（带has类名）
-                    if (publicSection) {{
-                        const publicItems = publicSection.querySelectorAll('li');
-                        publicItems.forEach(item => {{
-                            const text = item.textContent?.trim() || '';
-                            if (text && item.className.includes('has')) {{
-                                publicFacilities.push(text);
-                            }}
-                        }});
-                    }}
-
-                    result["房屋设施"] = '';
-                    result["卧室设施"] = bedroomFacilities.join('、');
-                    result["公共设施"] = publicFacilities.join('、');
                 }}
 
                 // 9. 是否安选
