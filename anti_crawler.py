@@ -180,13 +180,19 @@ class AntiCrawler:
         response = await page.goto(
             url,
             timeout=config.browser_timeout,
-            wait_until='domcontentloaded'
+            wait_until='networkidle'  # 修改为networkidle确保页面完全加载
         )
         return response.status == 200
 
     @handle_errors(default_return=False, operation_name="页面加载后处理")
     async def post_load_actions(self, page: Page) -> bool:
         """页面加载后的处理 - 单一职责：只负责加载后操作"""
+        # 确保页面完全加载，防止动态内容未渲染完成
+        try:
+            await self.wait_for_page_load(page, timeout=15000)
+        except:
+            logger.warning("页面完全加载等待超时，继续执行")
+
         # 页面加载后延时
         await page.wait_for_timeout(config.page_load_delay * 1000)
 
