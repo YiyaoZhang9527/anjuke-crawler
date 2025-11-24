@@ -77,6 +77,12 @@ class Config:
         self.min_area = int(config_dict.get('MIN_AREA', '1'))
         self.max_area = int(config_dict.get('MAX_AREA', '1000'))
 
+        # 新增功能配置
+        self.enable_duplicate_check = config_dict.get('ENABLE_DUPLICATE_CHECK', 'true').lower() == 'true'
+        self.duplicate_csv_file = config_dict.get('DUPLICATE_CSV_FILE', '').strip()
+        self.enable_verification_log = config_dict.get('ENABLE_VERIFICATION_LOG', 'true').lower() == 'true'
+        self.verification_log_file = config_dict.get('VERIFICATION_LOG_FILE', 'verification_log.csv')
+
     def get_dict(self) -> Dict[str, Any]:
         """返回配置字典"""
         return {
@@ -104,7 +110,11 @@ class Config:
             'min_price': self.min_price,
             'max_price': self.max_price,
             'min_area': self.min_area,
-            'max_area': self.max_area
+            'max_area': self.max_area,
+            'enable_duplicate_check': self.enable_duplicate_check,
+            'duplicate_csv_file': self.duplicate_csv_file,
+            'enable_verification_log': self.enable_verification_log,
+            'verification_log_file': self.verification_log_file
         }
 
     def __str__(self) -> str:

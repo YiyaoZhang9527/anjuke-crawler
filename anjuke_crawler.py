@@ -15,6 +15,7 @@ from data_extractor import data_extractor
 from list_page_crawler import list_page_crawler
 from logger import logger
 from utils import handle_errors, retry, StatisticsTracker
+from duplicate_checker import duplicate_checker
 
 
 class AnjukeCrawler:
@@ -24,6 +25,16 @@ class AnjukeCrawler:
         self.browser: Optional[Browser] = None
         self.page: Optional[Page] = None
         self.stats = StatisticsTracker()
+
+        # 初始化新功能模块
+        if config.enable_duplicate_check:
+            csv_file = config.duplicate_csv_file if config.duplicate_csv_file else config.csv_filename
+            self.duplicate_checker = duplicate_checker.__class__(csv_file)
+            self.duplicate_checker.enable(True)
+        else:
+            self.duplicate_checker = None
+
+        # 验证码日志功能已集成到logger中，无需单独初始化
 
     async def __aenter__(self):
         """异步上下文管理器入口"""
@@ -149,6 +160,13 @@ class AnjukeCrawler:
         data = await data_extractor.extract_data(self.page, url)
         if not data:
             return False
+
+        # 去重检查（如果启用）
+        if self.duplicate_checker:
+            house_id = data.get('房源编号', '').strip()
+            if self.duplicate_checker.is_duplicate(house_id):
+                logger.info(f"跳过重复房源: {house_id}")
+                return False
 
         # 保存数据
         await self._save_to_csv(data)

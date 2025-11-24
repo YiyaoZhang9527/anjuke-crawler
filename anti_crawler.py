@@ -74,105 +74,170 @@ class AntiCrawler:
         await page.mouse.wheel(0, -scroll_distance // 2)
         await asyncio.sleep(random.uniform(0.3, 0.8))
 
+    async def _detect_verification_page(self, page: Page) -> bool:
+        """检测是否为验证页面 - 专门优化58验证页面检测"""
+        try:
+            # 等待页面稳定
+            await page.wait_for_timeout(2000)
+
+            current_url = page.url
+
+            # 1. 直接检测58验证页面URL
+            if 'callback.58.com/antibot/verifycode' in current_url:
+                return True
+
+            # 2. 检查是否包含验证相关URL特征
+            if 'verifycode' in current_url or 'antibot' in current_url:
+                return True
+
+            # 3. 检查页面标题
+            page_title = await page.title()
+            verification_titles = ['验证码', '访问过于频繁', '安全验证', '请输入验证码']
+            if any(title in page_title for title in verification_titles):
+                return True
+
+            # 4. 直接查找58验证页面的特征按钮
+            try:
+                await page.wait_for_selector('button:has-text("点击按钮进行验证")', timeout=3000)
+                return True
+            except:
+                pass
+
+            # 5. 检查页面文本内容
+            page_content = await page.content()
+            verification_texts = ['点击按钮进行验证', '点击按钮完成验证', '访问过于频繁，本次访问做以下验证码校验']
+            if any(text in page_content for text in verification_texts):
+                return True
+
+            return False
+        except:
+            return False
+
+    async def _click_verification_button(self, page: Page) -> bool:
+        """点击验证按钮 - 专门优化58验证页面"""
+        try:
+            # 58验证页面的按钮选择器 - 按优先级排序
+            verification_selectors = [
+                'button:has-text("点击按钮进行验证")',  # 最准确的58验证按钮
+                'button:has-text("点击按钮完成验证")',
+                '[role="button"]:has-text("点击按钮进行验证")',
+                'text="点击按钮进行验证"',  # 直接文本匹配
+                '*:has-text("点击按钮进行验证")'  # 通用选择器作为兜底
+            ]
+
+            for selector in verification_selectors:
+                try:
+                    logger.info(f"尝试使用选择器点击验证按钮: {selector}")
+
+                    # 等待元素出现并可点击
+                    element = await page.wait_for_selector(selector, timeout=3000)
+                    if element:
+                        # 确保元素可见和可点击
+                        await element.wait_for_element_state('visible', timeout=2000)
+
+                        # 滚动到元素位置
+                        await element.scroll_into_view_if_needed()
+
+                        # 点击按钮
+                        await element.click()
+                        logger.info(f"✅ 成功点击验证按钮，使用选择器: {selector}")
+                        return True
+
+                except Exception as e:
+                    logger.debug(f"选择器 {selector} 失败: {e}")
+                    continue
+
+            logger.warning("❌ 所有验证按钮选择器都失败了")
+            return False
+
+        except Exception as e:
+            logger.warning(f"点击验证按钮时发生异常: {e}")
+            return False
+
+    async def _verify_success(self, page: Page) -> bool:
+        """验证是否成功 - 优化检测逻辑"""
+        try:
+            # 等待页面变化
+            await page.wait_for_timeout(3000)
+
+            current_url = page.url
+            page_title = await page.title()
+
+            logger.info(f"验证后检查 - URL: {current_url}, 标题: {page_title}")
+
+            # 成功标志1: URL不再包含58验证特征
+            url_success = (
+                'callback.58.com/antibot/verifycode' not in current_url and
+                'verifycode' not in current_url and
+                'antibot' not in current_url
+            )
+
+            # 成功标志2: 页面标题不再是验证页面
+            title_success = all(
+                title not in page_title
+                for title in ['验证码', '访问过于频繁', '请输入验证码', '安全验证']
+            )
+
+            # 成功标志3: URL已经跳转到安居客房源页面
+            url_target_success = 'anjuke.com' in current_url
+
+            # 只要满足任一成功条件就认为验证成功
+            success = url_success and (title_success or url_target_success)
+
+            logger.info(f"验证结果检查 - URL成功: {url_success}, 标题成功: {title_success}, 目标成功: {url_target_success}, 总体成功: {success}")
+
+            return success
+
+        except Exception as e:
+            logger.warning(f"验证成功检查时发生异常: {e}")
+            return False
+
     async def handle_verification(self, page: Page) -> bool:
-        """处理验证码 - 支持自动和手动验证"""
+        """处理验证码 - 简化的主控制逻辑"""
+        start_time = time.time()
+        current_url = page.url
+
         if not config.enable_auto_verification:
+            if config.enable_verification_log:
+                logger.log_verification_skip(current_url)
             return True
 
         try:
-            # 检查是否出现反爬验证页面 - 安居客特有的验证界面
-            await page.wait_for_timeout(3000)
-
-            # 检查页面标题和内容特征
-            page_title = await page.title()
-            page_content = await page.content()
-
-            verification_indicators = [
-                lambda: "验证码" in page_title,
-                lambda: "访问过于频繁" in page_title,
-                lambda: "点击按钮进行验证" in page_content,
-                lambda: "callback.58.com/antibot/verifycode" in page.url
-            ]
-
-            verification_found = False
-            for indicator in verification_indicators:
-                try:
-                    if await indicator():
-                        verification_found = True
-                        break
-                except:
-                    continue
-
-            if verification_found:
-                logger.verification_detected()
-
-                # 尝试自动点击验证按钮
-                verification_success = False
-                max_attempts = 3
-
-                for attempt in range(max_attempts):
-                    try:
-                        # 安居客验证按钮的特征
-                        verify_button_selectors = [
-                            'button:has-text("点击按钮进行验证")',
-                            'button:has-text("点击按钮完成验证")',
-                            'text="点击按钮进行验证"',  # 直接文本按钮
-                            'text="点击按钮完成验证"'
-                        ]
-
-                        button_clicked = False
-                        for selector in verify_button_selectors:
-                            try:
-                                # 先尝试通过文本查找按钮
-                                if selector.startswith('text='):
-                                    button_text = selector.replace('text=', '').strip('"')
-                                    button = await page.locator(f'button:has-text("{button_text}")').first
-                                else:
-                                    button = await page.locator(selector).first
-
-                                if button:
-                                    await button.click()
-                                    button_clicked = True
-                                    logger.info(f"已点击验证按钮 (尝试 {attempt + 1}/{max_attempts})")
-                                    break
-                            except:
-                                continue
-
-                        if button_clicked:
-                            # 等待页面跳转（验证需要时间）
-                            await page.wait_for_timeout(5000 + (attempt * 2000))
-
-                            # 检查是否验证成功 - 通过检查页面特征
-                            current_url = page.url
-                            page_title = await page.title()
-
-                            # 验证成功的标志：URL不再包含verifycode，或页面内容变为房源详情
-                            verification_success = (
-                                'verifycode' not in current_url and
-                                '验证码' not in page_title and
-                                ('fangyuan' in current_url or '房源' in await page.content())
-                            )
-
-                            if verification_success:
-                                logger.verification_success()
-                                return True
-                            else:
-                                logger.warning(f"验证未成功，继续尝试 ({attempt + 1}/{max_attempts})")
-                                continue
-
-                    except Exception as e:
-                        logger.warning(f"验证尝试 {attempt + 1} 失败: {e}")
-                        continue
-
-                if not verification_success:
-                    logger.verification_failed()
-                    return False
-            else:
+            if not await self._detect_verification_page(page):
                 return True
+
+            logger.verification_detected()
+
+            max_attempts = 3
+            for attempt in range(max_attempts):
+                try:
+                    if await self._click_verification_button(page):
+                        logger.info(f"已点击验证按钮 (尝试 {attempt + 1}/{max_attempts})")
+
+                        # 等待验证完成
+                        await page.wait_for_timeout(5000 + (attempt * 2000))
+
+                        if await self._verify_success(page):
+                            duration = time.time() - start_time
+                            logger.verification_success()
+                            if config.enable_verification_log:
+                                logger.log_verification_success(page.url, attempt + 1, duration)
+                            return True
+                        else:
+                            logger.warning(f"验证未成功，继续尝试 ({attempt + 1}/{max_attempts})")
+
+                except Exception as e:
+                    logger.warning(f"验证尝试 {attempt + 1} 失败: {e}")
+
+            duration = time.time() - start_time
+            logger.verification_failed()
+            if config.enable_verification_log:
+                logger.log_verification_failure(current_url, max_attempts, duration)
+            return False
 
         except Exception as e:
             logger.exception("验证码处理异常", e)
-            return True  # 异常时假设验证成功，避免阻塞
+            return True
 
     @handle_errors(default_return=False, operation_name="页面导航")
     async def navigate_to_page(self, page: Page, url: str) -> bool:

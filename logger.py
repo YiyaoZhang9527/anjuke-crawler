@@ -41,6 +41,10 @@ class Logger:
     def __init__(self, name: str = 'AnjukeCrawler'):
         self.name = name
         self.logger = self._setup_logger()
+        # 验证码日志组件
+        self.verification_log_file = None
+        self.verification_enabled = True
+        self._init_verification_log()
 
     def _setup_logger(self) -> logging.Logger:
         """设置日志器"""
@@ -64,6 +68,10 @@ class Logger:
                             log_filename = value
                         elif key == 'SHOW_PROGRESS':
                             show_progress = value.lower() == 'true'
+                        elif key == 'ENABLE_VERIFICATION_LOG':
+                            self.verification_enabled = value.lower() == 'true'
+                        elif key == 'VERIFICATION_LOG_FILE':
+                            self.verification_log_file = value
 
         logger = logging.getLogger(self.name)
         logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
@@ -229,6 +237,44 @@ class Logger:
             self.error(f"{message}: {str(exception)}")
         else:
             self.error(message)
+
+    def _init_verification_log(self):
+        """初始化验证码日志"""
+        if not self.verification_log_file:
+            self.verification_log_file = 'verification_log.csv'
+
+        # 确保日志文件存在
+        if not os.path.exists(self.verification_log_file):
+            with open(self.verification_log_file, 'w', encoding='utf-8') as f:
+                f.write("timestamp,url,result,attempts,duration_seconds\n")
+
+    def log_verification(self, url: str, result: str, attempts: int = 1, duration: float = 0.0):
+        """记录验证码处理结果"""
+        if not self.verification_enabled:
+            return
+
+        try:
+            timestamp = datetime.now().isoformat()
+            log_entry = f"{timestamp},{url},{result},{attempts},{duration:.2f}\n"
+
+            with open(self.verification_log_file, 'a', encoding='utf-8') as f:
+                f.write(log_entry)
+
+        except Exception:
+            # 静默失败，不影响主程序
+            pass
+
+    def log_verification_success(self, url: str, attempts: int = 1, duration: float = 0.0):
+        """记录验证成功"""
+        self.log_verification(url, "SUCCESS", attempts, duration)
+
+    def log_verification_failure(self, url: str, attempts: int = 1, duration: float = 0.0):
+        """记录验证失败"""
+        self.log_verification(url, "FAILED", attempts, duration)
+
+    def log_verification_skip(self, url: str):
+        """记录跳过验证"""
+        self.log_verification(url, "SKIPPED", 0, 0.0)
 
 
 # 全局日志实例

@@ -22,10 +22,12 @@ class ListPageCrawler:
         """从房源列表页提取房源详情链接"""
         logger.info(f"开始提取房源链接: {url}")
 
-        # 导航到房源列表页
-        response = await page.goto(url, wait_until='domcontentloaded')
-        if response.status != 200:
-            logger.error(f"页面访问失败，状态码: {response.status}")
+        # 导入反爬虫处理器
+        from anti_crawler import anti_crawler
+
+        # 使用安全导航处理验证码
+        if not await anti_crawler.safe_navigate(page, url):
+            logger.error("列表页导航失败")
             return []
 
         # 等待页面加载
@@ -43,7 +45,7 @@ class ListPageCrawler:
                         // 确保是完整的房源详情页URL
                         if (href.includes('anjuke.com') &&
                             href.includes('/fangyuan/') &&
-                            href.match(/\\/fangyuan\\/\\d+$/)) {
+                            href.match(/\\/fangyuan\\/\\d+/)) {
                             links.push(href);
                         }
                     }
